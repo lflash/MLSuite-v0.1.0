@@ -420,13 +420,15 @@ class NN(MLModule):
 
         # A[l+1] = Γ(W[l].A[l] + B[l])
         self.A = [np.zeros((s, 1)) for s in self.layerSizes]
+        self.Z = [np.zeros((s, 1)) for s in self.layerSizes]
         self.B = [np.random.randn(s, 1) for s in self.layerSizes[1:]]
         self.W = [np.random.randn(self.layerSizes[i+1],self.layerSizes[i]) for i in range(len(self.layerSizes[:-1]))]
 
         # store changes
-        self.nabla_W = [W*0 for W in self.W]
-        self.nabla_B = [B*0 for B in self.B]
 
+        self.nabla_B = [B*0 for B in self.B]
+        self.nabla_W = [W*0 for W in self.W]
+        
         # initialise universal params. will overwrite from string here if applicable
         super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
 
@@ -443,8 +445,8 @@ class NN(MLModule):
             self.logger.debug('self.W[l].shape:', self.W[l].shape)
             self.logger.debug('self.A[l].shape:', self.A[l].shape)
             self.logger.debug('self.B[l].shape:', self.B[l].shape)
-            
-            self.A[l+1] = self.activation(np.dot(self.W[l], self.A[l])+self.B[l])
+            self.Z[l+1] = np.dot(self.W[l], self.A[l])+self.B[l]
+            self.A[l+1] = self.activation(self.Z[l+1])
 
         return self.output()
 
@@ -456,44 +458,46 @@ class NN(MLModule):
     # accept Y_ideal, generate changes
     def acceptFeedback(self, feedback, applyChanges = True):
         
-        δC_δAlp1 = self.cost_derivative(self.A[-1], feedback)
-        return self.acceptNabla(δC_δAlp1, applyChanges = applyChanges)
+        ΔA = self.cost_derivative(self.A[-1], feedback)
+        return self.acceptNabla(ΔA, applyChanges = applyChanges)
     
     # accept ΔY, generate changes
-    def acceptNabla(self, δC_δAlp1, applyChanges = True):
+    def acceptNabla(self, ΔA, applyChanges = True):
 
+        
         nabla_B = []
         nabla_W = []
 
         # backprop algorithm
-        for l in list(range(len(self.B)))[::-1]:
+        for l in list(range(len(self.A)))[::-1][:-1]:
                 
-            Zlp1 = np.dot(self.W[l], self.A[l]) + self.B[l]
-            δAlp1_δZlp1 = self.activation_prime(Zlp1)
-            δZlp1_δWl = self.A[l]
-            δZlp1_δBl = 1
+            
+            ΔA_ΔZ = self.activation_prime(self.Z[l])
+            ΔZ = ΔA*ΔA_ΔZ
+            ΔZ_ΔWm1 = self.A[l-1]
+            ΔZ_δBm1 = 1
 
 
             self.logger.debug('l: ', l)
-            self.logger.debug('δC_δAlp1.shape: ',δC_δAlp1.shape)
-            self.logger.debug('δAlp1_δZlp1.shape: ',δAlp1_δZlp1.shape)
-            self.logger.debug('δZlp1_δWl.shape: ',δZlp1_δWl.shape)
-            self.logger.debug('δC_δAlp1:    ',δC_δAlp1)
-            self.logger.debug('δAlp1_δZlp1: ',δAlp1_δZlp1)
-            self.logger.debug('δZlp1_δWl:   ',δZlp1_δWl)
+            self.logger.debug('ΔA.shape: ',ΔA.shape)
+            self.logger.debug('ΔA_ΔZ.shape: ',ΔA_ΔZ.shape)
+            self.logger.debug('ΔZ_ΔWm1.shape: ',ΔZ_ΔWm1.shape)
+            self.logger.debug('ΔA:    ',ΔA)
+            self.logger.debug('ΔA_ΔZ: ',ΔA_ΔZ)
+            self.logger.debug('ΔZ_ΔWm1:   ',ΔZ_ΔWm1)
             
             
-            nabla_B = [δZlp1_δBl*δAlp1_δZlp1*δC_δAlp1] + nabla_B
-            nabla_W = [np.dot(δAlp1_δZlp1*δC_δAlp1, δZlp1_δWl.transpose())] + nabla_W
+            nabla_B = [ΔA*ΔA_ΔZ] + nabla_B
+            nabla_W = [np.dot(ΔA_ΔZ*ΔA, ΔZ_ΔWm1.transpose())] + nabla_W
 
 
-            self.logger.debug('nabla_B component: ', δZlp1_δBl*δAlp1_δZlp1*δC_δAlp1)
-            self.logger.debug('nabla_W component: ', np.dot(δAlp1_δZlp1*δC_δAlp1, δZlp1_δWl.transpose()))
-            self.logger.debug('self.W[l].shape:  ',self.W[l].shape)
-            self.logger.debug('nabla_W[l].shape: ',nabla_W[0].shape)
+            self.logger.debug('nabla_B component: ', ΔZ_δBm1*ΔZ)
+            self.logger.debug('nabla_W component: ', np.dot(ΔZ, ΔZ_ΔWm1.transpose()))
+            self.logger.debug('self.W[l-1].shape:  ',self.W[l-1].shape)
+            #self.logger.debug('nabla_W[l].shape: ',nabla_W[l].shape)
 
 
-            δC_δAlp1 = np.dot(self.W[l].transpose(), δAlp1_δZlp1*δC_δAlp1)
+            ΔA = np.dot(self.W[l-1].transpose(), ΔA_ΔZ*ΔA)
 
         
         self.feedbackCount = self.feedbackCount + 1
@@ -513,12 +517,13 @@ class NN(MLModule):
             self.nabla_B = [B*0 for B in self.B]
             self.feedbackCount = 0
         
-        return δC_δAlp1
+        return ΔA
 
     # reset all nablas, activations to 0
     def flush(self):
         self.nabla_W = [W*0 for W in self.W]
         self.nabla_B = [B*0 for B in self.B]
         self.A = [A*0 for A in self.A]
+        self.Z = [Z*0 for Z in self.Z]
 
     

@@ -514,8 +514,8 @@ class TEST_NN(unittest.TestCase):
 if __name__ == '__main__':
     # unittest.main()
     test = TEST_NN()
-    test.TEST_NN_basicFunctions()
-    
+    test.TEST_NN_deepTest()
+
 # %%
 
 """
