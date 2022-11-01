@@ -92,6 +92,10 @@ def difference(Y, Y_ideal):
     Y_ideal = np.reshape(Y_ideal,Y.shape)
     return Y - Y_ideal
 
+def argmax_prime(Y, Y_ideal):
+    digit = np.argmax(Y_ideal)
+    return (Y>Y[digit])*(Y[digit]-Y) + (Y.max()-Y[digit])*(Y_ideal==Y_ideal.max())
+
 def zero_pad(x, padDims, padToShape = False, corner = 'tl'):
     (xx,xy) = x.shape
     (px,py) = padDims
@@ -487,8 +491,8 @@ class NN(MLModule):
             self.logger.debug('ΔZ_ΔWm1:   ',ΔZ_ΔWm1)
             
             
-            nabla_B = [ΔA*ΔA_ΔZ] + nabla_B
-            nabla_W = [np.dot(ΔA_ΔZ*ΔA, ΔZ_ΔWm1.transpose())] + nabla_W
+            nabla_B = [ΔZ] + nabla_B
+            nabla_W = [np.dot(ΔZ, ΔZ_ΔWm1.transpose())] + nabla_W
 
 
             self.logger.debug('nabla_B component: ', ΔZ_δBm1*ΔZ)
@@ -497,7 +501,8 @@ class NN(MLModule):
             #self.logger.debug('nabla_W[l].shape: ',nabla_W[l].shape)
 
 
-            ΔA = np.dot(self.W[l-1].transpose(), ΔA_ΔZ*ΔA)
+            # for next iteration
+            ΔA = np.dot(self.W[l-1].transpose(), ΔZ)
 
         
         self.feedbackCount = self.feedbackCount + 1
@@ -527,3 +532,134 @@ class NN(MLModule):
         self.Z = [Z*0 for Z in self.Z]
 
     
+# %%
+# (1.2) ZNN base class
+
+class ZNN(MLModule):
+
+    # initialise class
+    def __init__(self, layerSizes, fromStr = '', comment = '', logLevel = logging.INFO, learningRate = 0.05, batchSize = 10, activation = sigmoid, activation_prime = sigmoid_prime, cost_derivative = difference):
+        
+        # initialise all instance specific params
+
+        self.layerSizes = layerSizes
+
+        self.learningRate = learningRate
+        self.batchSize = batchSize
+        self.activation = activation
+        self.activation_prime = activation_prime
+        self.cost_derivative = cost_derivative
+
+        # every batchSize feedbacks, apply changes
+        self.feedbackCount = 0
+
+        # A[l+1] = Γ(W[l].A[l] + B[l])
+        self.A = [np.zeros((s, 1)) for s in self.layerSizes]
+        self.Z = [np.zeros((s, 1)) for s in self.layerSizes]
+        self.B = [np.random.randn(s, 1) for s in self.layerSizes[1:]]
+        self.W = [np.random.randn(self.layerSizes[i+1],self.layerSizes[i]) for i in range(len(self.layerSizes[:-1]))]
+
+        # store changes
+
+        self.nabla_B = [B*0 for B in self.B]
+        self.nabla_W = [W*0 for W in self.W]
+        
+        # initialise universal params. will overwrite from string here if applicable
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+    # return output of last feedForward
+    def output(self):
+        return self.A[-1]
+
+    # one pass of feedForward algorithm
+    def feedForward(self):
+        for l in range(len(self.A[:-1])):
+
+            self.logger.debug('l:', l)
+            self.logger.debug('self.A[l+1].shape:', self.A[l+1].shape)
+            self.logger.debug('self.W[l].shape:', self.W[l].shape)
+            self.logger.debug('self.A[l].shape:', self.A[l].shape)
+            self.logger.debug('self.B[l].shape:', self.B[l].shape)
+            self.Z[l+1] = np.dot(self.W[l], self.A[l])+self.B[l]
+            self.A[l+1] = self.activation(self.Z[l+1])
+
+        return self.output()
+
+    # take input and feedForward
+    def push(self, input):
+        self.A[0] = np.reshape(input,self.A[0].shape)
+        return self.feedForward()
+
+    # accept Y_ideal, generate changes
+    def acceptFeedback(self, feedback, applyChanges = True):
+        
+        ΔZ = self.cost_derivative(self.Z[-1], feedback)
+        return self.acceptNabla(ΔZ, applyChanges = applyChanges)
+    
+    # accept ΔY, generate changes
+    def acceptNabla(self, ΔZ, applyChanges = True):
+
+        
+        nabla_B = []
+        nabla_W = []
+
+        # backprop algorithm
+        for l in list(range(len(self.A)))[::-1][:-1]:
+                
+            
+            ΔZ_ΔWm1 = self.A[l-1]
+            ΔZ_δBm1 = 1
+
+
+            self.logger.debug('l: ', l)
+            
+            self.logger.debug('ΔZ_ΔWm1.shape: ',ΔZ_ΔWm1.shape)
+            self.logger.debug('ΔZ_ΔWm1:   ',ΔZ_ΔWm1)
+            
+            
+            nabla_B = [ΔZ] + nabla_B
+            nabla_W = [np.dot(ΔZ, ΔZ_ΔWm1.transpose())] + nabla_W
+
+
+            self.logger.debug('nabla_B component: ', ΔZ_δBm1*ΔZ)
+            self.logger.debug('nabla_W component: ', np.dot(ΔZ, ΔZ_ΔWm1.transpose()))
+            self.logger.debug('self.W[l-1].shape:  ',self.W[l-1].shape)
+            #self.logger.debug('nabla_W[l].shape: ',nabla_W[l].shape)
+
+            # for next iteration
+            ΔA = np.dot(self.W[l-1].transpose(), ΔZ)
+            ΔA_ΔZ = self.activation_prime(self.Z[l-1])
+            ΔZ = ΔA*ΔA_ΔZ
+
+            self.logger.debug('ΔA.shape: ',ΔA.shape)
+            self.logger.debug('ΔA_ΔZ.shape: ',ΔA_ΔZ.shape)
+            self.logger.debug('ΔA:    ',ΔA)
+            self.logger.debug('ΔA_ΔZ: ',ΔA_ΔZ)
+        
+        self.feedbackCount = self.feedbackCount + 1
+
+        for l in range(len(nabla_B)):
+            self.nabla_W[l] = self.nabla_W[l] + nabla_W[l]
+            self.nabla_B[l] = self.nabla_B[l] + nabla_B[l]
+
+        # apply changes if batchsize has been reached
+        if (self.feedbackCount >= self.batchSize) and applyChanges:
+            
+            for l in range(len(self.nabla_W)):
+                self.W[l] = self.W[l] - self.nabla_W[l]*self.learningRate/self.batchSize
+                self.B[l] = self.B[l] - self.nabla_B[l]*self.learningRate/self.batchSize
+
+            self.nabla_W = [W*0 for W in self.W]
+            self.nabla_B = [B*0 for B in self.B]
+            self.feedbackCount = 0
+        
+        return ΔA
+
+    # reset all nablas, activations to 0
+    def flush(self):
+        self.nabla_W = [W*0 for W in self.W]
+        self.nabla_B = [B*0 for B in self.B]
+        self.A = [A*0 for A in self.A]
+        self.Z = [Z*0 for Z in self.Z]
+
+

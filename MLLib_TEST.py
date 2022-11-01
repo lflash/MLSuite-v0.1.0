@@ -2,6 +2,7 @@
 from MLLib import *
 import unittest
 import random
+from scipy import signal
 
 # TODO: - add asserts and logging in each function
 #       - remove image/Γ inputs to each function
@@ -510,11 +511,50 @@ class TEST_NN(unittest.TestCase):
         testScore = testScore/len(testData)
         print('testScore: ',round(testScore*100,2),'%')
         
+# TODO: - include all functions in NN
+class TEST_ZNN(unittest.TestCase):
+    def TEST_ZNN_basicFunctions(self):
+        testNet = ZNN(layerSizes = [2,3,4,2], batchSize = 2, learningRate = 0.3)
+        print(testNet)
+        Y = testNet.push(np.array([1,1]))
+        testNet.acceptFeedback(np.array([1,1]))
+        print(testNet)
 
+    def TEST_ZNN_deepTest(self):
+
+        # initialise ZNN and data
+        testZNN = ZNN(layerSizes = [784,100,100,10],learningRate = 0.05,activation = sigmoid, activation_prime = sigmoid, batchSize = 50, logLevel = logging.DEBUG)
+        (trainingData,testData) = get_training_data()
+        
+        # initial test
+        testScore = 0
+        for d in testData:
+            testScore = testScore + int(d['Y'] == np.argmax(testZNN.push(d['X'])))
+        testScore = testScore/len(testData)
+        print('testScore: ',round(testScore*100,2),'%')
+
+        # one training epoch
+        random.shuffle(trainingData)
+        for i, d in enumerate(trainingData):
+            testZNN.push(d['X'])
+            testZNN.acceptFeedback(numToArray(d['Y']))
+            if i%1000 == 0:
+                print('i: ',i,'/',len(trainingData),end="\r")
+
+        # re-test
+        testScore = 0
+        for d in testData:
+            testScore = testScore + int(d['Y'] == np.argmax(testZNN.push(d['X'])))
+        testScore = testScore/len(testData)
+        print('testScore: ',round(testScore*100,2),'%')
+        
+# TODO: test the argmax_prime cost derivative
 if __name__ == '__main__':
     # unittest.main()
-    test = TEST_NN()
-    test.TEST_NN_deepTest()
+    # test = TEST_NN()
+    # test.TEST_NN_deepTest()
+    test = TEST_ZNN()
+    test.TEST_ZNN_deepTest()
 
 # %%
 
