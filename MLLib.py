@@ -1,33 +1,59 @@
 # %%
-# (0.0) Imports, inits and TODOs
-# TODO: next major version will have:
-        # - python logging instead of printing/verbosity
-        # - __init__ funcs which use the super.__init__() function so args/optional args are explicit
-        # - unit testing as it's being built
-# TODO: calculate variance in Δparam in each batch. split largest variance node into 2 nodes, one with the positive applied, one with negative
-# TODO: wrapper module
+# (0.0) TODOs
+# THIS VERSION:
 # TODO: comment everything
-# TODO: convolution module
+# TODO: test everything
+# TODO: input function on everything
 # TODO: downsample/pooling module
-# TODO: learning rate investigator function
-    # as network size increases
-    # test time to converge, max score achieved
-# TODO: GAN flush function should run it til it converges-if it converges
+# TODO: modernise and fix CNN
+# TODO: change all prints to logs
+# TODO: implement obj.setLogLevel(l), obj.info(msg)/obj.debug(msg)/... 
+    # - setting log level will set levels below l to a pass statement equivalent, cutting down on compute time rather than getting logger to try/decide not to log everything
+
+# SUBSEQUENT VERSIONS:
+# TODO: module series: get output layer at end of some layer l
+# TODO: function layer performing a single function on all inputs
+# TODO: merge empirical model and function into a base class w/ 2 interfaces: __call__(), __getitem__()
+# TODO: funnel module to push output to multiple different places
+# TODO: change cost derivatives to variable functions. define at init
+# TODO: better learning than backprop
+    # - if gradient batch diverges (has two humps), split neuron in 2 and apply gradient of each hump so that the neuron does both things backprop is asking
+        # - calculate variance in Δparam in each batch. split largest variance node into 2 nodes, one with the positive applied, one with negative
+    # - component-wise learning
+        # - output vector is made of components f'ed together
+        # - identify components
+        # - use grad to identify most faulty component
+        # - improve that component only
+        # - see Z as a stack of componenets rather than 1 value
+    # - learning rate proportional to variance
+        # - if all Δ values in batch are the same, LR should be 1. reduces from there
+# TODO: stride in convolution funcs
+# TODO: GAN flush function should run it with 0 input until it converges-if it converges
 # TODO: add option in backprop to randomise lowest contributing/wrongly contributing nodes
-# TODO: Tokeniser/transformer classes
-# TODO: turn tests in cells into functions
-# TODO: try make I/O = Z rather than A
-# TODO: sinusoidal network
+# TODO: Tokeniser/encoder/transformer classes
 # TODO: stable diffusion network
+# TODO: training scheme definitions
+# TODO: reinforcement learning infrastructure
+# TODO: vector word embeddings
+    # - scrape wikipedia intros for sentences
+# TODO: port checkers game for reinforcement learning
+# TODO: make snake game for reinforcement learning
+
+# %%
+# (0.1) imports/initialisations
 
 import numpy as np
 import json
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import logging
+import datetime
 
 # warnings.simplefilter('error')
 np.set_printoptions(linewidth = 1000, suppress=True)
+
+# %%
+# (0.2) basic function defs
 
 def inc(x):
     # print('inc got ',x)
@@ -87,6 +113,14 @@ def sins_prime(z):
     #print('sins_prime: ', np.vectorize(lambda x: -2*np.pi*inc(k1)*np.sin(2*np.pi*inc(k2)*x/N)/N)(z))
     # return np.fft.irfft(z)
     return np.vectorize(lambda x: -2*np.pi*inc(k1)*np.sin(2*np.pi*inc(k2)*x/N)/N)(z)
+
+def zipFuncs(funcs):
+    def retFunc(z):
+        y = z*0
+        for i, f in enumerate(funcs):
+            y[i::len(funcs)] = f(z[i::len(funcs)])
+        return y
+    return retFunc
 
 def difference(Y, Y_ideal):
     Y_ideal = np.reshape(Y_ideal,Y.shape)
@@ -262,7 +296,7 @@ def iconv(a, b, mode = 'valid'):
 
         case 'valid':
             return zero_strip(trimmedc,outShape,stripToShape=True)
-            
+
 def get_training_data():
 
     (trainingImages, trainingDigits), (testImages, testDigits) = tf.keras.datasets.mnist.load_data()
@@ -283,20 +317,35 @@ def get_training_data():
 
 
 # %%
-# (1.0) MLModule Base Class
+# (0.3) basic obj that can be easily printed/saved/loaded 
 
-class MLModule():
-
+class basicObj():
     # init function for every MLModule child
-    def __init__(self, fromStr = '', comment = '', logLevel = logging.INFO):
+    def __init__(self, fromStr = '', comment = '', logLevel = logging.WARNING):
         
         if fromStr != '':
             self.fromStr(fromStr)
             
         else:
             self.comment = comment
-            self.logger = logging.getLogger(__name__)
+            self.id = hash(str(datetime.datetime.now())+str(self.__class__.__name__))
+            self.logger = logging.getLogger(str(self.__class__.__name__)+str(self.id))
             self.logger.setLevel(logLevel)
+            
+            # create console handler with a higher log level
+            ch = logging.StreamHandler()
+            ch.setLevel(logging.DEBUG)
+            # create formatter and add it to the handlers
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            ch.setFormatter(formatter)
+            self.logger.addHandler(ch)
+
+            # # create file handler which logs even debug messages
+            # fh = logging.FileHandler('spam.log')
+            # fh.setLevel(logging.DEBUG)
+            # fh.setFormatter(formatter)
+            # self.logger.addHandler(fh)
+            pass
 
     # prepare a class variable for conversion to JSON
     def serialise(self, v):
@@ -372,6 +421,20 @@ class MLModule():
     # converts str to class obj
     def fromStr(self, inputStr):
         return self.fromDict(json.loads(inputStr, strict=False))
+     
+    # so obj can be used as dict key
+    def hash(self):
+        return(hash(str(self)))
+
+
+# %%
+# (1.0) MLModule Base Class
+
+class MLModule(basicObj):
+
+    # to be overridden: push input, return input
+    def input(self, input):
+        return input
 
     # to be overridden: push input, pop output
     def push(self, input):
@@ -397,17 +460,184 @@ class MLModule():
     def isInitialised(self):
         return True
 
-    # so obj can be used as dict key
-    def hash(self):
-        return(hash(str(self)))
 
 # %%
-# (1.1) NN base class
+# (1.1) Parallel Module Base Class
+
+class ModuleParallel(MLModule):
+
+    # initialise class
+    def __init__(self, modules, fromStr = '', comment = '', logLevel = logging.WARNING):
+
+        self.logger = None
+
+        # modules follow format [a,[b,c],d] where input X is fed into a, module series[b,c], d which each create component of output Y
+        self.modules = []
+
+        # get output shape and slices associated with each module
+        self.outputSlices = []
+        self.inputSlices = []
+        xTally = 0
+        yTally = 0
+        xMax = 0
+        yMax = 0
+        for i, m in enumerate(modules):
+            
+            if str(type(m)) == "<class 'list'>":
+                m = ModuleSeries(m, fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+            outShape = m.output().shape
+            self.outputSlices = self.outputSlices + [(slice(yTally,yTally + outShape[0]),slice(0,outShape[1]))]
+            yTally = yTally + outShape[0]
+            yMax = max(yMax,outShape[1])
+
+            inShape = m.input(None).shape
+            self.inputSlices = self.inputSlices + [(slice(xTally,xTally + inShape[0]),slice(0,inShape[1]))]
+            xTally = xTally + inShape[0]
+            xMax = max(yMax,outShape[1])
+
+            self.modules = self.modules + [m]
+
+        self.outputShape = (yTally,yMax)
+        self.inputShape  = (xTally,xMax)
+
+        # initialise the default variables
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+        for m in self.modules:
+            m.logger = self.logger
+
+    # return output of last feedForward
+    def output(self):
+        output = np.zeros(self.outputShape)
+        for m, s in zip(self.modules,self.outputSlices):
+            output[s] = m.output()
+        return output
+
+    # one pass of feedForward algorithm
+    def feedForward(self):
+        for m in self.modules:
+            m.feedForward()
+        return self.output()
+
+    # take and return an input
+    def input(self, input):
+        if type(input) != type(None):
+            self.A[0] = np.reshape(input,self.A[0].shape)
+            retInput = np.zeros(self.inputShape)
+            for m, s in zip(self.modules,self.inputSlices):
+                retInput[s] = m.input(input)
+
+            return retInput
+        
+        retInput = np.zeros(self.inputShape)
+        for m, s in zip(self.modules,self.inputSlices):
+            retInput[s] = m.input(input[s])
+
+        return retInput
+
+    # take input and feedForward
+    def push(self, input):
+        for m, s in zip(self.modules,self.inputSlices):
+            m.push(input[s])
+        return self.output()
+
+    # accept Y_ideal, generate changes
+    def acceptFeedback(self, feedback, applyChanges = True):
+        ΔX = np.zeros(self.inputShape)
+        for m, si, so in zip(self.modules,self.inputSlices, self.outputSlices):
+            ΔX[si] = ΔX[si] + m.acceptFeedback(feedback[so])
+        return ΔX
+
+    # accept ΔY, generate changes
+    def acceptNabla(self, ΔY, applyChanges = True):
+        
+        ΔX = np.zeros(self.inputShape)
+        for m, si, so in zip(self.modules,self.inputSlices, self.outputSlices):
+            ΔX[si] = ΔX[si] + m.acceptNabla(ΔY[so])
+        return ΔX
+
+    # reset all nablas, activations to 0
+    def flush(self):
+        for m in self.modules:
+            m.flush()
+        return self
+
+
+# %%
+# (1.2) MLWrapper Base Class
+
+class ModuleSeries(MLModule):
+
+    # initialise class
+    def __init__(self, modules, fromStr = '', comment = '', logLevel = logging.WARNING):
+
+        # modules follow format [a,[b,c],d] where output of a feeds into b,c in parallel, the outputs of which feed into d
+        self.modules = []
+
+
+        for i, m in enumerate(modules):
+            
+            if str(type(m)) == "<class 'list'>":
+                m = ModuleParallel(m, fromStr = fromStr, comment = comment, logLevel = logLevel)
+            
+            self.modules = self.modules + [m]
+
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+        for m in self.modules:
+            m.logger = self.logger
+
+        # return output of last feedForward
+    def output(self):
+        return self.modules[-1].output()
+
+    # one pass of feedForward algorithm
+    def feedForward(self):
+        X = self.modules[0].feedForward()
+        for m in self.modules[1:]:
+            X = m.push(X)
+        return X
+
+    # take and return input
+    def input(self, input):
+        return self.modules[0].input(input)
+
+    # take input and feedForward
+    def push(self, input):
+        self.input(input)
+        return self.feedForward()
+
+    # accept Y_ideal, generate changes
+    def acceptFeedback(self, feedback, applyChanges = True):
+
+        ΔY = self.modules[-1].acceptFeedback(feedback, applyChanges = True)
+
+        for m in self.modules[::-1][1:]:
+            ΔY = m.acceptNabla(ΔY)
+
+        return ΔY
+    
+    # accept ΔY, generate changes
+    def acceptNabla(self, ΔY, applyChanges = True):
+
+        for m in self.modules[::-1]:
+            ΔY = m.acceptNabla(ΔY)
+
+        return ΔY
+
+    # reset all nablas, activations to 0
+    def flush(self):
+        for m in self.modules:
+            m.flush()
+        return self
+
+
+# %%
+# (1.3) NN base class
 
 class NN(MLModule):
 
     # initialise class
-    def __init__(self, layerSizes, fromStr = '', comment = '', logLevel = logging.INFO, learningRate = 0.05, batchSize = 10, activation = sigmoid, activation_prime = sigmoid_prime, cost_derivative = difference):
+    def __init__(self, layerSizes, fromStr = '', comment = '', logLevel = logging.WARNING, learningRate = 0.05, batchSize = 10, activation = sigmoid, activation_prime = sigmoid_prime, cost_derivative = difference):
         
         # initialise all instance specific params
 
@@ -444,19 +674,25 @@ class NN(MLModule):
     def feedForward(self):
         for l in range(len(self.A[:-1])):
 
-            self.logger.debug('l:', l)
-            self.logger.debug('self.A[l+1].shape:', self.A[l+1].shape)
-            self.logger.debug('self.W[l].shape:', self.W[l].shape)
-            self.logger.debug('self.A[l].shape:', self.A[l].shape)
-            self.logger.debug('self.B[l].shape:', self.B[l].shape)
+            # self.logger.debug('l:'+ str(l))
+            # self.logger.debug('self.A[l+1].shape:'+ str(self.A[l+1].shape))
+            # self.logger.debug('self.W[l].shape:'+ str(self.W[l].shape))
+            # self.logger.debug('self.A[l].shape:'+ str(self.A[l].shape))
+            # self.logger.debug('self.B[l].shape:'+ str(self.B[l].shape))
             self.Z[l+1] = np.dot(self.W[l], self.A[l])+self.B[l]
             self.A[l+1] = self.activation(self.Z[l+1])
 
         return self.output()
 
+    # take and return an input
+    def input(self, input):
+        if type(input) != type(None):
+            self.A[0] = np.reshape(input,self.A[0].shape)
+        return self.A[0]
+
     # take input and feedForward
     def push(self, input):
-        self.A[0] = np.reshape(input,self.A[0].shape)
+        self.input(input)
         return self.feedForward()
 
     # accept Y_ideal, generate changes
@@ -482,22 +718,22 @@ class NN(MLModule):
             ΔZ_δBm1 = 1
 
 
-            self.logger.debug('l: ', l)
-            self.logger.debug('ΔA.shape: ',ΔA.shape)
-            self.logger.debug('ΔA_ΔZ.shape: ',ΔA_ΔZ.shape)
-            self.logger.debug('ΔZ_ΔWm1.shape: ',ΔZ_ΔWm1.shape)
-            self.logger.debug('ΔA:    ',ΔA)
-            self.logger.debug('ΔA_ΔZ: ',ΔA_ΔZ)
-            self.logger.debug('ΔZ_ΔWm1:   ',ΔZ_ΔWm1)
+            # self.logger.debug('l: '+ str(l))
+            # self.logger.debug('ΔA.shape: '+str(ΔA.shape))
+            # self.logger.debug('ΔA_ΔZ.shape: '+str(ΔA_ΔZ.shape))
+            # self.logger.debug('ΔZ_ΔWm1.shape: '+str(ΔZ_ΔWm1.shape))
+            # self.logger.debug('ΔA:    '+str(ΔA))
+            # self.logger.debug('ΔA_ΔZ: '+str(ΔA_ΔZ))
+            # self.logger.debug('ΔZ_ΔWm1:   '+str(ΔZ_ΔWm1))
             
             
             nabla_B = [ΔZ] + nabla_B
             nabla_W = [np.dot(ΔZ, ΔZ_ΔWm1.transpose())] + nabla_W
 
 
-            self.logger.debug('nabla_B component: ', ΔZ_δBm1*ΔZ)
-            self.logger.debug('nabla_W component: ', np.dot(ΔZ, ΔZ_ΔWm1.transpose()))
-            self.logger.debug('self.W[l-1].shape:  ',self.W[l-1].shape)
+            # self.logger.debug('nabla_B component: '+ str(ΔZ_δBm1*ΔZ))
+            # self.logger.debug('nabla_W component: '+ str(np.dot(ΔZ, ΔZ_ΔWm1.transpose())))
+            # self.logger.debug('self.W[l-1].shape:  '+str(self.W[l-1].shape))
             #self.logger.debug('nabla_W[l].shape: ',nabla_W[l].shape)
 
 
@@ -531,14 +767,14 @@ class NN(MLModule):
         self.A = [A*0 for A in self.A]
         self.Z = [Z*0 for Z in self.Z]
 
-    
+
 # %%
-# (1.2) ZNN base class
+# (1.4) ZNN base class
 
 class ZNN(MLModule):
 
     # initialise class
-    def __init__(self, layerSizes, fromStr = '', comment = '', logLevel = logging.INFO, learningRate = 0.05, batchSize = 10, activation = sigmoid, activation_prime = sigmoid_prime, cost_derivative = difference):
+    def __init__(self, layerSizes, fromStr = '', comment = '', logLevel = logging.WARNING, learningRate = 0.05, batchSize = 10, activation = sigmoid, activation_prime = sigmoid_prime, cost_derivative = difference):
         
         # initialise all instance specific params
 
@@ -575,19 +811,25 @@ class ZNN(MLModule):
     def feedForward(self):
         for l in range(len(self.A[:-1])):
 
-            self.logger.debug('l:', l)
-            self.logger.debug('self.A[l+1].shape:', self.A[l+1].shape)
-            self.logger.debug('self.W[l].shape:', self.W[l].shape)
-            self.logger.debug('self.A[l].shape:', self.A[l].shape)
-            self.logger.debug('self.B[l].shape:', self.B[l].shape)
+            self.logger.debug('l:', str(l))
+            self.logger.debug('self.A[l+1].shape:'+ str(self.A[l+1].shape))
+            self.logger.debug('self.W[l].shape:'+ str(self.W[l].shape))
+            self.logger.debug('self.A[l].shape:'+ str(self.A[l].shape))
+            self.logger.debug('self.B[l].shape:'+ str(self.B[l].shape))
             self.Z[l+1] = np.dot(self.W[l], self.A[l])+self.B[l]
             self.A[l+1] = self.activation(self.Z[l+1])
 
         return self.output()
 
+    # take and return an input
+    def input(self, input):
+        if type(input) != type(None):
+            self.A[0] = np.reshape(input,self.A[0].shape)
+        return self.A[0]
+
     # take input and feedForward
     def push(self, input):
-        self.A[0] = np.reshape(input,self.A[0].shape)
+        self.input(input)
         return self.feedForward()
 
     # accept Y_ideal, generate changes
@@ -611,19 +853,19 @@ class ZNN(MLModule):
             ΔZ_δBm1 = 1
 
 
-            self.logger.debug('l: ', l)
+            self.logger.debug('l: ', str(l))
             
-            self.logger.debug('ΔZ_ΔWm1.shape: ',ΔZ_ΔWm1.shape)
-            self.logger.debug('ΔZ_ΔWm1:   ',ΔZ_ΔWm1)
+            self.logger.debug('ΔZ_ΔWm1.shape: '+str(ΔZ_ΔWm1.shape))
+            self.logger.debug('ΔZ_ΔWm1:   '+str(ΔZ_ΔWm1))
             
             
             nabla_B = [ΔZ] + nabla_B
             nabla_W = [np.dot(ΔZ, ΔZ_ΔWm1.transpose())] + nabla_W
 
 
-            self.logger.debug('nabla_B component: ', ΔZ_δBm1*ΔZ)
-            self.logger.debug('nabla_W component: ', np.dot(ΔZ, ΔZ_ΔWm1.transpose()))
-            self.logger.debug('self.W[l-1].shape:  ',self.W[l-1].shape)
+            self.logger.debug('nabla_B component: '+ str(ΔZ_δBm1*ΔZ))
+            self.logger.debug('nabla_W component: '+ str(np.dot(ΔZ, ΔZ_ΔWm1.transpose())))
+            self.logger.debug('self.W[l-1].shape:  '+str(self.W[l-1].shape))
             #self.logger.debug('nabla_W[l].shape: ',nabla_W[l].shape)
 
             # for next iteration
@@ -631,10 +873,10 @@ class ZNN(MLModule):
             ΔA_ΔZ = self.activation_prime(self.Z[l-1])
             ΔZ = ΔA*ΔA_ΔZ
 
-            self.logger.debug('ΔA.shape: ',ΔA.shape)
-            self.logger.debug('ΔA_ΔZ.shape: ',ΔA_ΔZ.shape)
-            self.logger.debug('ΔA:    ',ΔA)
-            self.logger.debug('ΔA_ΔZ: ',ΔA_ΔZ)
+            self.logger.debug('ΔA.shape: '+str(ΔA.shape))
+            self.logger.debug('ΔA_ΔZ.shape: '+str(ΔA_ΔZ.shape))
+            self.logger.debug('ΔA:    '+str(ΔA))
+            self.logger.debug('ΔA_ΔZ: '+str(ΔA_ΔZ))
         
         self.feedbackCount = self.feedbackCount + 1
 
@@ -661,5 +903,458 @@ class ZNN(MLModule):
         self.nabla_B = [B*0 for B in self.B]
         self.A = [A*0 for A in self.A]
         self.Z = [Z*0 for Z in self.Z]
+
+
+# %%
+# (1.6) CNN base class
+
+# class CNN(MLModule):
+#     # TODO: test, modernise, rename to just reflect it only doing convolutions not pooling
+
+#     def zero(self, **kwargs):
+#         # print('kwargs: ', kwargs)
+
+#         crucialIncludes = ['filterSizes']
+#         for k in crucialIncludes:
+#             if k not in kwargs.keys():
+#                 raise Exception(k + ' not included in keyed args. must include: ', crucialIncludes)
+#             else:
+#                 exec('self.' + k + ' = '+str(kwargs[k]))
+
+
+#         # optional includes
+#         optionalIncludes = {'learningRate': 0.05, 'batchSize': 10, 'progressiveLearning': False , 'activation': 'linear', 'activation_prime': 'linear_prime'}
+#         for (k, v) in optionalIncludes.items():
+#             # print(k, v)
+#             if k not in kwargs.keys():
+#                 # print('self.' + k + ' = '+str(v))
+#                 exec('self.' + k + ' = '+str(v))
+#             else:
+#                 exec('self.' + k + ' = '+str(kwargs[k]))
+        
+
+#         self.feedbackCount = 0
+
+#         # A[l+1] = convolve(A[l], H[l])
+
+#         self.H = [np.random.randn(s, s) for s in self.filterSizes]
+#         # self.H = [normalise(np.random.randn(s, s)) for s in self.filterSizes]
+#         self.A = []
+#         self.Z = []
+
+#         self.nabla_H = [H*0 for H in self.H]
+#         self.learningFocus = 0
+
+#     def output(self):
+#         return self.A[-1]
+
+#     def feedForward(self):
+        
+#         self.Z = []
+#         for l in range(len(self.H)):
+#             self.Z = self.Z + [conv(self.A[l], self.H[l])]
+#             self.A = self.A + [self.activation(self.Z[l])]
+
+#             if self.verbose:
+#                 print('l: ', l)
+#                 print('self.A[l].shape: ', self.A[l].shape)
+#                 print('self.H[l].shape: ', self.H[l].shape)
+#                 print('self.Z[l].shape: ', self.Z[l].shape)
+            
+            
+            
+#         # self.A = self.A + [self.activation(self.Z[-1])]
+
+#         return self.output()
+    
+#     def push(self, input):
+#         self.Z = []
+#         self.A = [input]
+#         return self.feedForward()
+
+#     def cost_derivative(self, Y_ideal):
+#         Y_ideal = np.reshape(Y_ideal,self.A[-1].shape)
+                
+#         return (self.A[-1]-Y_ideal)
+
+#     def acceptFeedback(self, feedback, applyChanges = True):
+        
+#         δC_δAlp1 = feedback - self.A[-1]
+#         return self.acceptNabla(δC_δAlp1, applyChanges = applyChanges)
+    
+#     def acceptNabla(self, δC_δAlp1, applyChanges = True):
+#         # δC_δAlp1 = np.flip(δC_δAlp1)
+#         # if np.sum(abs(δC_δAlp1))>9999999999999999:
+#         #     return 0
+#         # else:
+#         #     print(np.sum(np.abs(δC_δAlp1)))
+#         #     print('np.sum(np.abs(δC_δAlp1))<0.001: ', np.sum(np.abs(δC_δAlp1))<0.001)
+
+#         nabla_H = []
+        
+#         # backprop algorithm
+#         for l in list(range(len(self.H)))[::-1]:
+
+            
+#             # ΔY = (Y - Y_ideal)
+#             # ΔH_ideal = (H - H_ideal)
+#             # ΔH = deconvolve(ΔY, X)
+#             if self.verbose:
+#                 print('l: ', l)
+#                 print('δC_δAlp1.shape:    ', δC_δAlp1.shape)
+#                 print('self.A[l+1].shape: ', self.A[l+1].shape)
+#                 print('self.Z[l].shape: ', self.Z[l].shape)
+#                 print('self.A[l].shape:   ', self.A[l].shape)
+#                 print('self.H[l].shape:   ', self.H[l].shape)
+
+#             ####        
+#             # ΔYc = (Y - Y_ideal)
+            
+#             # ΔHc = deconvolve(ΔYc, X)
+#             ####
+#             ΔAΔZ = (δC_δAlp1*self.activation_prime(self.Z[l]))
+#             if self.verbose:
+#                 print('******')
+#                 print('ΔAΔZ.shape:        ', ΔAΔZ.shape)
+#                 print('δC_δAlp1.shape:    ', δC_δAlp1.shape)
+#                 print('self.A[l].shape:   ', self.A[l].shape)
+
+#             # nabla_H = [deconvolve(ΔAΔZ, self.A[l])] + nabla_H
+            
+#             # δC_δAlp1 = deconvolve(ΔAΔZ, self.H[l])
+
+#             # TODO: for the love of christ I only need the following 2 lines of code to fix this
+#             #       I give up. for now...
+#             nabla_H = [iconv(ΔAΔZ, self.A[l])] + nabla_H
+#             δC_δAlp1 = iconv(ΔAΔZ, self.H[l])
+
+#             # nabla_H = [signal.convolve2d(ΔAΔZ, self.A[l],mode = 'valid')] + nabla_H
+#             # δC_δAlp1 = signal.convolve2d(ΔAΔZ, self.H[l],mode = 'full')
+
+#             if self.verbose:
+#                 print('******')
+#                 print('ΔAΔZ.shape:        ', ΔAΔZ.shape)
+#                 print('δC_δAlp1.shape:    ', δC_δAlp1.shape)
+#                 print('self.A[l].shape:   ', self.A[l].shape)
+#                 print('******')
+#                 print()
+
+#         self.feedbackCount = self.feedbackCount + 1
+
+#         for l in range(len(nabla_H)):
+#             # print('nabla_H[l].shape:', nabla_H[l].shape)
+#             # print('self.nabla_H[l].shape:', self.nabla_H[l].shape)
+#             self.nabla_H[l] = self.nabla_H[l] + nabla_H[l]
+
+#         # apply changes if batchsize has been reached
+#         if (self.feedbackCount >= self.batchSize) and applyChanges:
+            
+#             for l in range(len(self.nabla_H)):
+#                 if (self.learningFocus == l) or (not self.progressiveLearning):
+#                     self.H[l] = self.H[l] + self.nabla_H[l]*self.learningRate/self.feedbackCount
+#             self.learningFocus = (self.learningFocus+1)%len(self.nabla_H)
+#             self.nabla_H = [H*0 for H in self.H]
+#             self.feedbackCount = 0
+        
+#         return δC_δAlp1
+
+#     def flush(self):
+#         self.nabla_H = [H*0 for H in self.H]
+#         self.A = []
+        
+#     def plot(self):
+
+#         f, axarr = plt.subplots(len(self.A),4)
+#         for i in range(len(self.H)):
+
+
+#             axarr[i, 0].imshow(self.A[i], interpolation='none', cmap='Greys')
+#             axarr[i, 0].set_title('A['+str(i)+']')
+#             axarr[i, 1].imshow(self.Z[i], interpolation='none', cmap='Greys')
+#             axarr[i, 1].set_title('Z['+str(i)+']')
+#             axarr[i, 2].imshow(self.H[i], interpolation='none', cmap='Greys')
+#             axarr[i, 2].set_title('H['+str(i)+']')
+#             axarr[i, 3].imshow(self.nabla_H[i], interpolation='none', cmap='Greys')
+#             axarr[i, 3].set_title('ΔH['+str(i)+']')
+            
+#         axarr[-1, 0].imshow(self.A[i+1], interpolation='none', cmap='Greys')
+#         axarr[-1, 0].set_title('A['+str(i+1)+']')
+        
+#         plt.show()
+
+
+# %%
+# (1.7) Teleporter base class and in/out
+    # - in training using this module, the system must make a backwards pass without changes on iteration n+1, and then may make changes on iteration n 
+
+class Teleporter_IN(MLModule):
+
+    # initialise class
+    def __init__(self, linkedTeleporter, fromStr = '', comment = '', logLevel = logging.WARNING):
+
+        self.linkedTeleporter = linkedTeleporter
+
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+    def output(self):
+        return np.array([])
+
+    def feedForward(self):
+        return self.output()
+
+    def push(self, input):
+        return self.linkedTeleporter.push(input)
+
+    def acceptFeedback(self, feedback):
+        return self.linkedTeleporter.ΔX
+
+    def acceptNabla(self, nabla):
+        return self.linkedTeleporter.ΔX
+    
+    def flush(self):
+        self.linkedTeleporter.flush()
+        return self
+
+class Teleporter_OUT(MLModule):
+
+    # initialise class
+    def __init__(self, linkedTeleporter, fromStr = '', comment = '', logLevel = logging.WARNING):
+
+        self.linkedTeleporter = linkedTeleporter
+
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+    def output(self):
+        return self.linkedTeleporter.output()
+
+    def feedForward(self):
+        return self.output()
+
+    def input(self, input):
+        return np.array([])
+
+    def push(self, input):
+        return self.output()
+
+    def acceptFeedback(self, feedback):
+        return self.linkedTeleporter.acceptFeedback(feedback)
+
+    def acceptNabla(self, nabla):
+        return self.linkedTeleporter.acceptNabla(nabla)
+    
+    def flush(self):
+        self.linkedTeleporter.flush()
+        return self
+
+class Teleporter(MLModule):
+
+    # initialise class
+    def __init__(self, size, fromStr = '', comment = '', logLevel = logging.WARNING, cost_derivative = difference):
+
+        self.IN = Teleporter_IN(self, fromStr = fromStr, comment = comment, logLevel = logLevel)
+        self.OUT = Teleporter_OUT(self, fromStr = fromStr, comment = comment, logLevel = logLevel)
+        
+        self.X = np.zeros(size)
+        self.ΔX = np.zeros(size)
+        self.cost_derivative = cost_derivative
+
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+    def output(self):
+        return self.X
+
+    def feedForward(self):
+        return self.output()
+
+    def input(self, input):
+        if type(input) != type(None):
+            self.X = input
+        return self.X
+
+    def push(self, input):
+        return self.input(input)
+
+    def acceptFeedback(self, feedback):
+        self.ΔX = self.cost_derivative(self.X, feedback)
+        return self.ΔX
+
+    def acceptNabla(self, nabla):
+        self.ΔX = nabla
+        return self.ΔX
+    
+    def flush(self):
+        self.X = self.X*0
+        self.ΔX = self.ΔX*0
+        return self
+
+
+# %%
+# (2.0) Empirical model class
+
+class EmpiricalModel(basicObj):
+    # TODO: add converge modes
+    # TODO: add logarithmic scales to steps
+
+    def __init__(self, params, scoreCriteria, mode = 'step'):
+        # mode:
+            # - 'step':     step across all values between upper and lower bounds
+            # - 'converge': test upper, lower, and mid bound. adjust mid bound. re-test mid bound 'steps' times
+        self.mode = mode
+
+        # vars:
+        # { 'var1Name': {
+            # 'upperBound':     float ...,
+            # 'lowerBound':     float ..., 
+            # 'steps':          float ...,  
+            # 'mode':           'linear'/'log'
+        # } }
+        
+        # add in:
+        # 'currentStep':    float ..., 
+        # 'currentValue':   float ...,
+        
+        self.params = params
+        for p in self.params.values():
+            p['currentValue'] = 0
+
+        # scoreCriteria:
+        # ['c1', 'c2', ...]
+        self.scoreIndices = {}
+        for i, c in enumerate(scoreCriteria):
+            self.scoreIndices[c] = i
+
+        
+        # as many dimensions as there are parameters + 1 for number of scores
+        modelShape = (v['steps'] for v in self.params.values())
+        self.scoreMatrix = np.zeros((*modelShape, len(scoreCriteria)))
+
+    def __getitem__(self, key):
+        return self.params[key]['currentValue']
+
+    def pushScore(self, scores):
+        print('self.allPos[self.i]: ',self.allPos[self.i])
+        print('self.scoreMatrix.shape: ',self.scoreMatrix.shape)
+        for c, v in scores.items():
+            print('c,v:', c,v)
+            print('index:',(*self.allPos[self.i],self.scoreIndices[c]))
+            self.scoreMatrix[(*self.allPos[self.i],self.scoreIndices[c])] = v
+            
+    def __iter__(self):
+        self.allPos = list(np.ndindex(self.scoreMatrix.shape[:-1]))
+        self.i = -1
+        return self
+
+    def __next__(self):
+        self.i=self.i+1
+        if self.i >= len(self.allPos):
+            for i, step in enumerate(self.getBestPos()):
+                variableNames = list(self.params.keys())
+                variableName = variableNames[i]
+                # TODO: currently scale is linear, do for logarithmic too, and for convergence mode
+                self[variableName] = (step*(self.params[variableName]['upperBound']-self.params[variableName]['lowerBound'])/(self.params[variableName]['steps']-1))+(self.params[variableName]['lowerBound'])
+            del self.allPos, self.i
+            raise StopIteration
+        else:
+            variableNames = list(self.params.keys())
+            currentPos = self.allPos[self.i]
+            for i, step in enumerate(currentPos):
+                variableName = variableNames[i]
+                # TODO: currently scale is linear, do for logarithmic too, and for convergence mode
+                self[variableName] = (step*(self.params[variableName]['upperBound']-self.params[variableName]['lowerBound'])/(self.params[variableName]['steps']-1))+(self.params[variableName]['lowerBound'])
+
+            
+            return self
+
+    def getBestPos(self):
+        combinedScores = np.prod(self.scoreMatrix, axis=-1)
+        return tuple(np.argwhere(combinedScores == combinedScores.max())[0])
+
+
+# # %%
+# # (2.1) Empirical function class
+
+# class EmpiricalFunction(basicObj):
+#     # TODO: test
+
+#     def __init__(self, steps, XupperBound, XlowerBound, YupperBound, YlowerBound, scoreCriteria, mode = 'step'):
+#         # mode:
+#             # - 'step':     step across all values between upper and lower bounds
+#             # - 'converge': test upper, lower, and mid bound. adjust mid bound. re-test mid bound 'steps' times
+#         self.mode = mode
+#         self.steps = steps
+#         self.XupperBound = XupperBound
+#         self.XlowerBound = XlowerBound
+#         self.YupperBound = YupperBound
+#         self.YlowerBound = YlowerBound
+#         self.Xstep = (self.XupperBound - self.XlowerBound)/self.steps
+#         self.Ystep = (self.YupperBound - self.YlowerBound)/self.steps
+#         # vars:
+#         # { 'var1Name': {
+#             # 'upperBound':     float ...,
+#             # 'lowerBound':     float ..., 
+#             # 'steps':          float ...,  
+#             # 'mode':           'linear'/'log'
+#         # } }
+        
+#         # add in:
+#         # 'currentStep':    float ..., 
+#         # 'currentValue':   float ...,
+        
+#         self.params = np.ones((steps))*self.YlowerBound
+
+#         # scoreCriteria:
+#         # ['c1', 'c2', ...]
+#         self.scoreIndices = {}
+#         for i, c in enumerate(scoreCriteria):
+#             self.scoreIndices[c] = i
+
+#     def __call__(self, x):
+#         index = int((x-self.XlowerBound)/self.Xstep)
+        
+#         # if index<0:
+#         #     return self.params[0]
+#         # elif index>=self.steps:
+#         #     return self.params[-1]
+#         # else:
+#         #     return self.params[index]
+
+#         # conditionless version of code spelled out above
+#         return (index<0)*self.params[0] + (index>=self.steps)*self.params[-1] + (index>=0 and index<self.steps)*self.params[index]
+
+#     def pushScore(self, scores):
+        
+#         for c, v in scores.items():
+            
+#             self.scoreMatrix[self.i, c] = v
+            
+#     def __iter__(self):
+#         perms = list(np.ndindex((self.steps for p in self.params)))
+#         self.allParamPermutations = (np.array(perms)*self.Ystep) + self.YlowerBound
+#         self.i = -1
+#         self.scoreMatrix = np.zeros(len(perms), len(self.scoreIndices))
+#         return self
+
+#     def __next__(self):
+#         self.i=self.i+1
+        
+#         if self.i >= len(self.allParamPermutations):
+#             # exit condition
+#             self.updateToBest()
+#             del self.allParamPermutations, self.i, self.scoreMatrix
+#             raise StopIteration
+
+#         else:
+#             # normal iteration
+
+#             self.params = self.allParamPermutations[self.i]
+#             return self
+
+#     def updateToBest(self):
+#         bestIndex = np.argmax(np.prod(self.scoreMatrix, axis=-1))
+#         self.params = self.allParamPermutations[bestIndex]
+#         return self
+
+
+
 
 
