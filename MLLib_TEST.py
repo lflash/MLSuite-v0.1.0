@@ -580,7 +580,24 @@ class TEST_ZNN(unittest.TestCase):
             testScore = testScore + int(d['Y'] == np.argmax(testZNN.push(d['X'])))
         testScore = testScore/len(testData)
         print('testScore: ',round(testScore*100,2),'%')
-        
+
+
+class TEST_FL(unittest.TestCase):
+    def TEST_FL_basicFunctions(self):
+        testFL = FL(sigmoid, sigmoid_prime)
+        X1 = np.random.rand(5)
+        Y1 = sigmoid(X1)
+        Y_ideal1 = np.random.rand(5)
+        ΔX1 = testFL.cost_derivative(Y1, Y_ideal1)
+
+
+        Y2 = testFL.push(X1)
+        assert Y2.all() == Y1.all()
+
+        ΔX2 = testFL.acceptFeedback(Y_ideal1)
+        assert ΔX2.all() == ΔX1.all()
+   
+
 class TEST_ModuleSeries(unittest.TestCase):
     def TEST_ModuleSeries_init(self):
         # initialise NN and data

@@ -329,7 +329,7 @@ class basicObj():
         else:
             self.comment = comment
             self.id = hash(str(datetime.datetime.now())+str(self.__class__.__name__))
-            self.logger = logging.getLogger(str(self.__class__.__name__)+str(self.id))
+            self.logger = logging.getLogger(str(self.__class__.__name__)+'_'+str(self.id))
             self.logger.setLevel(logLevel)
             
             # create console handler with a higher log level
@@ -438,6 +438,10 @@ class MLModule(basicObj):
 
     # to be overridden: push input, pop output
     def push(self, input):
+        return self.feedforward()
+
+    # to be overridden: feed forward from stored input, return output
+    def feedforward(self):
         return self.output()
 
     # to be overridden: maintain structure, flush IO dependent vars + nablas with 0s
@@ -446,7 +450,7 @@ class MLModule(basicObj):
 
     # to be overridden: return output
     def output(self):
-        return 0
+        return np.array([])
 
     # to be overridden: takes ideal output (feedback) for current state. uses it to learn
     def acceptFeedback(self, feedback):
@@ -903,6 +907,55 @@ class ZNN(MLModule):
         self.nabla_B = [B*0 for B in self.B]
         self.A = [A*0 for A in self.A]
         self.Z = [Z*0 for Z in self.Z]
+
+# %%
+# (1.5) Function layer base class
+
+class FL(MLModule):
+        # initialise class
+    def __init__(self, f, f_prime, fromStr = '', comment = '', logLevel = logging.WARNING, cost_derivative = difference):
+
+        self.X = np.array([])
+        self.ΔX = np.array([])
+        self.f = f
+        self.f_prime = f_prime
+        self.cost_derivative = cost_derivative
+
+        super().__init__(fromStr = fromStr, comment = comment, logLevel = logLevel)
+
+    # push input, return input
+    def input(self, input):
+        if type(input) != type(None):
+            self.X = input
+        return self.X
+
+    # feed forward from stored input, return output
+    def feedForward(self):
+        self.Y = self.f(self.X)
+        return self.output()
+
+    # push input, pop output
+    def push(self, input):
+        self.input(input)
+        return self.feedForward()
+
+    # maintain structure, flush IO dependent vars + nablas with 0s
+    def flush(self):
+        self.X = np.array([])
+        return self
+
+    # to be overridden: return output
+    def output(self):
+        return self.Y
+
+    # to be overridden: takes ideal output (feedback) for current state. uses it to learn
+    def acceptFeedback(self, feedback):
+        return self.acceptNabla(self.cost_derivative(self.Y, feedback))
+
+    # takes ideal output (feedback) for current state. uses it to learn
+    def acceptNabla(self, nabla):
+        return self.f_prime(nabla)
+
 
 
 # %%
