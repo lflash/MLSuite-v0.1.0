@@ -586,9 +586,9 @@ class ModuleSeries(MLModule):
         for m in self.modules:
             m.logger = self.logger
 
-        # return output of last feedForward
-    def output(self):
-        return self.modules[-1].output()
+    # return output of specified feedForward
+    def output(self, layer = -1):
+        return self.modules[layer].output()
 
     # one pass of feedForward algorithm
     def feedForward(self):

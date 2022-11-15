@@ -749,9 +749,7 @@ if __name__ == '__main__':
     # test = TEST_NN()
     # test.TEST_NN_basicFunctions()
     # test.TEST_NN_deepTest()
-    # test = TEST_ModuleSeries()
-    # test.TEST_ModuleSeries_init()
-    # test.TEST_ModuleSeries_push()
-    # test.TEST_ModuleSeries_backprop()
+    test = TEST_ModuleSeries()
+    test.TEST_ModuleSeries_init()
 
 # %%
